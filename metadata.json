@@ -1,0 +1,7 @@
+{
+  "name": "EtsyFlow: AI Bulk Product Optimizer",
+  "description": "Professional tool for processing bulk product images. Automatically removes backgrounds, enhances quality, and generates Etsy-ready studio shots using Gemini AI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
