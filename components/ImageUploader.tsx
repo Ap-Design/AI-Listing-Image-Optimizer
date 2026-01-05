@@ -9,45 +9,54 @@ interface ImageUploaderProps {
 const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isConverting, setIsConverting] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-
-    setIsConverting(true);
-    const filesArray = Array.from(e.target.files) as File[];
+  const processFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     
+    setIsConverting(true);
     try {
-      const newImages: ProductImage[] = await Promise.all(
-        filesArray.map(async (file: File) => {
+      const processedResults = await Promise.all(
+        // Added explicit return type Promise<ProductImage | null> to fix type predicate compatibility issues
+        files.map(async (file: File): Promise<ProductImage | null> => {
           let processedFile = file;
+          const fileNameLower = file.name.toLowerCase();
           const isHeic = 
-            file.name.toLowerCase().endsWith('.heic') || 
-            file.name.toLowerCase().endsWith('.heif') || 
+            fileNameLower.endsWith('.heic') || 
+            fileNameLower.endsWith('.heif') || 
             file.type === 'image/heic' || 
             file.type === 'image/heif';
 
           if (isHeic) {
             try {
-              // Dynamically import heic2any for HEIC support
-              const heic2any = (await import('https://esm.sh/heic2any')).default;
+              // @ts-ignore
+              const heic2any = (await import('heic2any')).default;
               const convertedBlob = await heic2any({
                 blob: file,
-                toType: 'image/png',
-                quality: 0.8
+                toType: 'image/jpeg',
+                quality: 0.7 // Higher compatibility and smaller size for preview/processing
               });
               
-              // heic2any can return an array if the HEIC contains multiple images
               const finalBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
               
               processedFile = new File(
                 [finalBlob], 
-                file.name.replace(/\.(heic|heif)$/i, ".png"), 
-                { type: 'image/png' }
+                file.name.replace(/\.(heic|heif)$/i, ".jpg"), 
+                { type: 'image/jpeg' }
               );
             } catch (convError) {
               console.error("HEIC conversion failed for:", file.name, convError);
-              // Fallback to original file, though it will likely fail preview/API
+              // Return null so we can filter out failed HEIC conversions that would break the preview
+              return null;
             }
+          }
+
+          // Double check the type before creating a preview. 
+          // Most browsers can't render HEIC/HEIF natively yet.
+          const finalType = processedFile.type.toLowerCase();
+          if (finalType.includes('heic') || finalType.includes('heif')) {
+             console.warn("Skipping file as it remains in HEIC format and cannot be previewed:", file.name);
+             return null;
           }
 
           const previewUrl = URL.createObjectURL(processedFile);
@@ -63,11 +72,48 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
         })
       );
 
-      onUpload(newImages);
+      // Filter out any nulls from failed conversions or unsupported formats
+      const newImages = processedResults.filter((img): img is ProductImage => img !== null);
+      
+      if (newImages.length > 0) {
+        onUpload(newImages);
+      } else if (files.length > 0) {
+        alert("Failed to process images. Please ensure they are valid JPG, PNG, or HEIC files.");
+      }
     } catch (error) {
       console.error("Error processing files:", error);
     } finally {
       setIsConverting(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    processFiles(Array.from(e.target.files));
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isConverting) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    
+    if (isConverting) return;
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processFiles(Array.from(e.dataTransfer.files));
+      e.dataTransfer.clearData();
     }
   };
 
@@ -77,7 +123,9 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
       reader.readAsDataURL(file);
       reader.onload = () => {
         const result = reader.result as string;
-        resolve(result.split(',')[1]);
+        // Check if result contains the data prefix
+        const base64Part = result.includes(',') ? result.split(',')[1] : result;
+        resolve(base64Part);
       };
       reader.onerror = error => reject(error);
     });
@@ -96,19 +144,25 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
           )}
         </div>
         <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-4 tracking-tight">
-          {isConverting ? "Converting High-Res Photos..." : "Bulk Product Image Processing"}
+          {isConverting ? "Converting & Optimizing Photos..." : "Bulk Product Image Processing"}
         </h2>
         <p className="text-slate-500 dark:text-slate-400 text-lg max-w-md mx-auto">
           {isConverting 
-            ? "We're optimizing your HEIC images for processing. This will only take a second." 
+            ? "We're optimizing your HEIC images for high-fidelity processing. This ensures maximum quality on Etsy." 
             : "Upload your raw product photos. We'll automatically remove backgrounds, enhance quality, and create Etsy-ready studio shots."}
         </p>
       </div>
 
       <div 
         onClick={() => !isConverting && fileInputRef.current?.click()}
-        className={`group relative border-4 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl p-12 transition-all bg-white dark:bg-slate-900 shadow-sm ${
-          isConverting ? 'opacity-50 cursor-wait' : 'hover:border-orange-300 dark:hover:border-orange-500/50 hover:bg-orange-50/30 dark:hover:bg-orange-500/5 cursor-pointer'
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`group relative border-4 border-dashed rounded-3xl p-12 transition-all bg-white dark:bg-slate-900 shadow-sm ${
+          isConverting ? 'opacity-50 cursor-wait border-slate-200 dark:border-slate-800' : 
+          isDragging ? 'border-orange-500 bg-orange-50/50 dark:bg-orange-500/10 cursor-copy' :
+          'border-slate-200 dark:border-slate-800 hover:border-orange-300 dark:hover:border-orange-500/50 hover:bg-orange-50/30 dark:hover:bg-orange-500/5 cursor-pointer'
         }`}
       >
         <input 
@@ -122,21 +176,24 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
         />
         <div className="space-y-4">
           <div className="flex flex-col items-center">
-            <span className="text-slate-400 group-hover:text-orange-500 mb-2">
+            <span className={`transition-colors mb-2 ${isDragging ? 'text-orange-600' : 'text-slate-400 group-hover:text-orange-500'}`}>
               <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
             </span>
             <span className="text-lg font-bold text-slate-700 dark:text-slate-200 transition-colors">
-              {isConverting ? "Processing Files..." : "Click to upload or drag & drop"}
+              {isConverting ? "Processing Files..." : isDragging ? "Drop your photos here" : "Click to upload or drag & drop"}
             </span>
             <span className="text-sm text-slate-400">JPG, PNG, HEIC up to 10MB per image</span>
           </div>
           <button 
-            className="bg-slate-900 dark:bg-slate-700 text-white px-6 py-2 rounded-xl font-medium shadow-sm transition-transform group-hover:scale-105"
+            className={`px-6 py-2 rounded-xl font-medium shadow-sm transition-all ${
+              isDragging ? 'bg-orange-600 scale-110 text-white' : 'bg-slate-900 dark:bg-slate-700 text-white group-hover:scale-105'
+            }`}
             disabled={isConverting}
+            onClick={(e) => { e.stopPropagation(); !isConverting && fileInputRef.current?.click(); }}
           >
-            {isConverting ? "Please wait" : "Select Files"}
+            {isConverting ? "Optimizing..." : isDragging ? "Release to Drop" : "Select Files"}
           </button>
         </div>
       </div>

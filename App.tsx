@@ -11,7 +11,7 @@ const App: React.FC = () => {
   const [state, setState] = useState<AppState>({
     images: [],
     isGlobalProcessing: false,
-    globalPrompt: "Professional studio product photography, minimalist clean background, soft lighting, sharp focus, high resolution.",
+    globalPrompt: "Photorealistic studio product photography. Keep the original product subject exactly as it is. Do not alter the main subject's shape, texture, or design. Natural textures with subtle imperfections and micro-details. No plastic or waxy look. Minimalist clean background, real-world soft lighting, sharp focus, high resolution.",
     currentStep: 'upload'
   });
 
@@ -61,6 +61,23 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleRemoveImage = (id: string) => {
+    setState(prev => {
+      const remainingImages = prev.images.filter(img => img.id !== id);
+      // Clean up object URL to prevent memory leaks
+      const removedImage = prev.images.find(img => img.id === id);
+      if (removedImage?.previewUrl) {
+        URL.revokeObjectURL(removedImage.previewUrl);
+      }
+      
+      return {
+        ...prev,
+        images: remainingImages,
+        currentStep: remainingImages.length === 0 ? 'upload' : prev.currentStep
+      };
+    });
+  };
+
   const startBulkProcessing = async () => {
     setState(prev => ({ ...prev, currentStep: 'process', isGlobalProcessing: true }));
     
@@ -104,10 +121,15 @@ const App: React.FC = () => {
   };
 
   const reset = () => {
+    // Revoke all preview URLs
+    state.images.forEach(img => {
+      if (img.previewUrl) URL.revokeObjectURL(img.previewUrl);
+    });
+
     setState({
       images: [],
       isGlobalProcessing: false,
-      globalPrompt: "Professional studio product photography, minimalist clean background, soft lighting, sharp focus, high resolution.",
+      globalPrompt: "Photorealistic studio product photography. Keep the original product subject exactly as it is. Do not alter the main subject's shape, texture, or design. Natural textures with subtle imperfections and micro-details. No plastic or waxy look. Minimalist clean background, real-world soft lighting, sharp focus, high resolution.",
       currentStep: 'upload'
     });
   };
@@ -179,6 +201,7 @@ const App: React.FC = () => {
                 globalPrompt={state.globalPrompt}
                 onGlobalPromptChange={(p) => setState(prev => ({ ...prev, globalPrompt: p }))}
                 onImagePromptChange={(id, p) => updateImageStatus(id, 'ready', { editedPrompt: p })}
+                onRemoveImage={handleRemoveImage}
                 onStartProcessing={startBulkProcessing}
               />
               <div className="flex justify-center pt-8">

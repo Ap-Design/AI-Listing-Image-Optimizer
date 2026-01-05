@@ -7,6 +7,7 @@ interface PromptEditorProps {
   globalPrompt: string;
   onGlobalPromptChange: (p: string) => void;
   onImagePromptChange: (id: string, p: string) => void;
+  onRemoveImage: (id: string) => void;
   onStartProcessing: () => void;
 }
 
@@ -15,6 +16,7 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
   globalPrompt, 
   onGlobalPromptChange, 
   onImagePromptChange,
+  onRemoveImage
 }) => {
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
@@ -46,7 +48,18 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {images.map(img => (
-          <div key={img.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm transition-all hover:shadow-md">
+          <div key={img.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm transition-all hover:shadow-md group relative">
+            {/* Remove Button */}
+            <button 
+              onClick={() => onRemoveImage(img.id)}
+              className="absolute top-2 right-2 z-20 p-1.5 bg-white/90 dark:bg-slate-800/90 text-slate-500 hover:text-red-500 hover:bg-white dark:hover:bg-slate-700 rounded-full shadow-md transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+              title="Remove image"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
             <div className="relative aspect-square bg-slate-100 dark:bg-slate-800 overflow-hidden">
               <img src={img.previewUrl} alt="Preview" className="w-full h-full object-cover" />
               {img.status === 'analyzing' && (
