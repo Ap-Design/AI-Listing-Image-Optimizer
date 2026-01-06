@@ -7,6 +7,7 @@ export interface ProductImage {
   status: 'pending' | 'analyzing' | 'ready' | 'processing' | 'completed' | 'error';
   suggestedPrompt?: string;
   editedPrompt?: string;
+  usedPrompt?: string;
   resultUrl?: string;
   error?: string;
   isEtsyValidated?: boolean;

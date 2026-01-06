@@ -19,13 +19,13 @@ export class GeminiService {
             }
           },
           {
-            text: "Identify the product in this image and suggest a professional Etsy-style enhancement prompt. IMPORTANT: 1. The suggested prompt MUST explicitly state to 'Keep the original product subject exactly as it is' and 'Do not alter the main subject\'s shape or design'. 2. Focus on PHOTOREALISM: demand natural textures, visible micro-details, and subtle imperfections. 3. Explicitly forbid plastic, waxy, glossy, CGI, or over-smoothed looks. 4. Request real-world studio lighting. Output ONLY the suggested prompt string."
+            text: "Analyze the product in this image. Suggest a professional Etsy-style environment prompt. CRITICAL RULES: 1. Use the instruction: 'PRESERVE THE PRODUCT AS A LOCKED ASSET'. 2. Explicitly forbid modifying the product's shape, color, branding, or texture. 3. Focus the prompt purely on the environment, lighting, and camera settings. 4. Forbid adding extra objects that touch or overlap the product. 5. Demand 'Pixel-perfect silhouette preservation'. Output ONLY the suggested prompt string."
           }
         ]
       }
     });
 
-    return response.text?.trim() || "Photorealistic studio product photography. Keep the original product subject exactly as it is. Natural textures and subtle imperfections. No waxy or plastic look. Real-world lighting, sharp focus, 8k resolution.";
+    return response.text?.trim() || "Clean studio setting, soft natural lighting, high resolution, preserve product exactly.";
   }
 
   /**
@@ -49,16 +49,15 @@ export class GeminiService {
             },
             {
               text: isPro 
-                ? `ACT AS PROFESSIONAL PHOTOGRAPHER. STRICT REQUIREMENT: Keep the original product subject exactly as it is. Do not alter the main subject's shape or design. 
-                   GOAL: Photorealistic output with natural textures and visible micro-details. 
-                   AVOID: Any plastic, waxy, glossy, CGI, or over-smoothed surfaces. 
-                   LIGHTING: Real-world studio lighting with subtle imperfections.
-                   PROMPT: ${prompt}. 
-                   RENDER: 2K high-fidelity, zero background noise.`
-                : `Transform this product image based on this prompt: ${prompt}. 
-                   STRICT REQUIREMENT: Keep the original product subject exactly as it is. 
-                   STYLE: Photorealistic, natural texture, micro-details. Avoid waxy or plastic looks. 
-                   Only modify background and quality.`
+                ? `TASK: ADVANCED PRODUCT IMAGE EDITING. 
+                   SUBJECT PRESERVATION: The product in the input image is a LOCKED ASSET. Do not change its shape, scale, texture, labels, or geometry. 
+                   ZERO HALLUCINATION POLICY: Do not add extra limbs, parts, or random objects overlapping the product. 
+                   ENVIRONMENT MODIFICATION: ${prompt}. 
+                   RENDER: 2K ultra-high-fidelity, realistic studio lighting, sharp focus on the product, clean background.`
+                : `STRICT PRODUCT PRESERVATION: Keep the central subject exactly as it appears in the original photo. 
+                   DO NOT ALTER: Shape, texture, colors, or fine details of the product.
+                   MODIFICATION: Only update the background and lighting according to: ${prompt}.
+                   STYLE: Photorealistic, no CGI artifacts.`
             }
           ]
         },

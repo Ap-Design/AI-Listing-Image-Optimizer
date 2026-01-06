@@ -7,12 +7,17 @@ import PromptEditor from './components/PromptEditor';
 import ProcessingQueue from './components/ProcessingQueue';
 import ResultsGallery from './components/ResultsGallery';
 
+interface ExtendedAppState extends AppState {
+  ignoreCustomInstructions: boolean;
+}
+
 const App: React.FC = () => {
-  const [state, setState] = useState<AppState>({
+  const [state, setState] = useState<ExtendedAppState>({
     images: [],
     isGlobalProcessing: false,
-    globalPrompt: "Photorealistic studio product photography. Keep the original product subject exactly as it is. Do not alter the main subject's shape, texture, or design. Natural textures with subtle imperfections and micro-details. No plastic or waxy look. Minimalist clean background, real-world soft lighting, sharp focus, high resolution.",
-    currentStep: 'upload'
+    globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution. Zero added artifacts.",
+    currentStep: 'upload',
+    ignoreCustomInstructions: false
   });
 
   const [model, setModel] = useState<ProcessingModel>(ProcessingModel.FLASH);
@@ -35,6 +40,20 @@ const App: React.FC = () => {
         updateImageStatus(img.id, 'error', { error: "Analysis failed" });
       }
     }
+  };
+
+  const handleModelChange = async (newModel: ProcessingModel) => {
+    if (newModel === ProcessingModel.PRO) {
+      if (typeof window !== 'undefined' && (window as any).aistudio) {
+        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+        if (!hasKey) {
+          await (window as any).aistudio.openSelectKey();
+        }
+      }
+    }
+    setModel(newModel);
+    // Reset override when switching models to ensure standard mode doesn't inherit pro-only state
+    setState(prev => ({ ...prev, ignoreCustomInstructions: false }));
   };
 
   /**
@@ -86,7 +105,8 @@ const App: React.FC = () => {
 
       updateImageStatus(img.id, 'processing');
       try {
-        const promptToUse = img.editedPrompt || state.globalPrompt;
+        // Logic: Use global prompt if checkbox is checked AND we are in Pro mode, otherwise use custom instruction or fallback to global.
+        const promptToUse = (isPro && state.ignoreCustomInstructions) ? state.globalPrompt : (img.editedPrompt || state.globalPrompt);
         
         // Phase 1: AI Enhancement & Generation (using 2K for Pro)
         const result = await gemini.processImage(img.base64, promptToUse, model);
@@ -101,7 +121,8 @@ const App: React.FC = () => {
           
           updateImageStatus(img.id, 'completed', { 
             resultUrl: result,
-            isEtsyValidated: isEtsyValidated
+            isEtsyValidated: isEtsyValidated,
+            usedPrompt: promptToUse
           });
         } else {
           updateImageStatus(img.id, 'error', { error: "Optimization failed" });
@@ -129,8 +150,9 @@ const App: React.FC = () => {
     setState({
       images: [],
       isGlobalProcessing: false,
-      globalPrompt: "Photorealistic studio product photography. Keep the original product subject exactly as it is. Do not alter the main subject's shape, texture, or design. Natural textures with subtle imperfections and micro-details. No plastic or waxy look. Minimalist clean background, real-world soft lighting, sharp focus, high resolution.",
-      currentStep: 'upload'
+      globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution. Zero added artifacts.",
+      currentStep: 'upload',
+      ignoreCustomInstructions: false
     });
   };
 
@@ -156,21 +178,13 @@ const App: React.FC = () => {
             <div className="flex items-center space-x-4">
               <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-full p-1 transition-colors">
                 <button 
-                  onClick={() => setModel(ProcessingModel.FLASH)}
+                  onClick={() => handleModelChange(ProcessingModel.FLASH)}
                   className={`px-4 py-1.5 text-xs font-medium rounded-full transition-all ${model === ProcessingModel.FLASH ? 'bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
                 >
                   Standard
                 </button>
                 <button 
-                  onClick={async () => {
-                    if (typeof window !== 'undefined' && (window as any).aistudio) {
-                      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-                      if (!hasKey) {
-                        await (window as any).aistudio.openSelectKey();
-                      }
-                    }
-                    setModel(ProcessingModel.PRO);
-                  }}
+                  onClick={() => handleModelChange(ProcessingModel.PRO)}
                   className={`px-4 py-1.5 text-xs font-medium rounded-full transition-all ${model === ProcessingModel.PRO ? 'bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
                 >
                   High-Res (Pro)
@@ -199,12 +213,31 @@ const App: React.FC = () => {
               <PromptEditor 
                 images={state.images}
                 globalPrompt={state.globalPrompt}
+                ignoreCustomInstructions={isPro && state.ignoreCustomInstructions}
                 onGlobalPromptChange={(p) => setState(prev => ({ ...prev, globalPrompt: p }))}
                 onImagePromptChange={(id, p) => updateImageStatus(id, 'ready', { editedPrompt: p })}
                 onRemoveImage={handleRemoveImage}
                 onStartProcessing={startBulkProcessing}
               />
-              <div className="flex justify-center pt-8">
+              
+              <div className="flex flex-col items-center pt-8 space-y-4">
+                {isPro && (
+                  <label className="flex items-center space-x-3 cursor-pointer group mb-2">
+                    <div className="relative">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only peer"
+                        checked={state.ignoreCustomInstructions}
+                        onChange={(e) => setState(prev => ({ ...prev, ignoreCustomInstructions: e.target.checked }))}
+                      />
+                      <div className="w-10 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 dark:peer-focus:ring-orange-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                    </div>
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                      Ignore custom instructions (use Global Prompt for all)
+                    </span>
+                  </label>
+                )}
+
                 <button 
                   onClick={startBulkProcessing}
                   disabled={state.images.some(img => img.status === 'analyzing')}

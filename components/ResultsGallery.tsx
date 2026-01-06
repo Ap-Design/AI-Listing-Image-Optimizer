@@ -130,7 +130,7 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({ images, isPro }) => {
               <div className="bg-slate-50 dark:bg-slate-950 p-6 rounded-2xl border border-slate-100 dark:border-slate-800">
                 <h4 className="text-sm font-bold text-slate-900 dark:text-white mb-2">Optimized Prompt Strategy</h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 italic leading-relaxed bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-                  "{selectedImage.editedPrompt || "Default studio style applied"}"
+                  "{selectedImage.usedPrompt || selectedImage.editedPrompt || "Default studio style applied"}"
                 </p>
                 <div className="mt-6 flex items-center justify-between">
                   <div className="flex space-x-2">

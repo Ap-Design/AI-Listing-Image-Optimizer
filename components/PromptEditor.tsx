@@ -5,6 +5,7 @@ import { ProductImage } from '../types';
 interface PromptEditorProps {
   images: ProductImage[];
   globalPrompt: string;
+  ignoreCustomInstructions?: boolean;
   onGlobalPromptChange: (p: string) => void;
   onImagePromptChange: (id: string, p: string) => void;
   onRemoveImage: (id: string) => void;
@@ -14,6 +15,7 @@ interface PromptEditorProps {
 const PromptEditor: React.FC<PromptEditorProps> = ({ 
   images, 
   globalPrompt, 
+  ignoreCustomInstructions = false,
   onGlobalPromptChange, 
   onImagePromptChange,
   onRemoveImage
@@ -48,7 +50,7 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {images.map(img => (
-          <div key={img.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm transition-all hover:shadow-md group relative">
+          <div key={img.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm transition-all group relative hover:shadow-md">
             {/* Remove Button */}
             <button 
               onClick={() => onRemoveImage(img.id)}
@@ -71,8 +73,10 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
             </div>
             <div className="p-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 tracking-widest uppercase">Custom Instructions</span>
-                {img.status === 'ready' && (
+                <span className="text-[10px] font-bold tracking-widest uppercase text-slate-400 dark:text-slate-500">
+                  {ignoreCustomInstructions ? 'Instructions Ignored' : 'Custom Instructions'}
+                </span>
+                {!ignoreCustomInstructions && img.status === 'ready' && (
                   <span className="text-[10px] font-bold text-green-500 flex items-center">
                     <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/><path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd"/></svg>
                     AI SUGGESTED
@@ -81,9 +85,14 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
               </div>
               <textarea 
                 value={img.editedPrompt || ""}
+                disabled={ignoreCustomInstructions}
                 onChange={(e) => onImagePromptChange(img.id, e.target.value)}
-                className="w-full h-32 p-3 text-xs border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none resize-none transition-all"
-                placeholder="Individual instructions for this item..."
+                className={`w-full h-32 p-3 text-xs border bg-slate-50 dark:bg-slate-950 rounded-xl outline-none resize-none transition-all ${
+                  ignoreCustomInstructions 
+                    ? 'border-slate-100 dark:border-slate-800 text-slate-300 dark:text-slate-600 cursor-not-allowed opacity-50 select-none' 
+                    : 'border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-orange-500 focus:border-transparent'
+                }`}
+                placeholder={ignoreCustomInstructions ? "Global override active..." : "Individual instructions for this item..."}
               />
             </div>
           </div>
