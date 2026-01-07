@@ -11,109 +11,179 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
   const [isConverting, setIsConverting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
+  /**
+   * Resizes an image to a "Large" format (max 2048px).
+   * This is critical for mobile browsers to prevent memory crashes when handling 
+   * high-res iPhone photos (48MP+).
+   */
+  const resizeToLarge = async (blob: Blob, fileName: string): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        
+        // "Large" target: 2048px is standard for web/Etsy while being memory-safe
+        const MAX_DIM = 2048; 
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_DIM) {
+            height *= MAX_DIM / width;
+            width = MAX_DIM;
+          }
+        } else {
+          if (height > MAX_DIM) {
+            width *= MAX_DIM / height;
+            height = MAX_DIM;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) {
+          reject(new Error("Canvas context creation failed"));
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (resizedBlob) => {
+            if (!resizedBlob) {
+              reject(new Error("Compression failed"));
+              return;
+            }
+            const cleanName = fileName.replace(/\.(heic|heif)$/i, ".jpg");
+            resolve(new File([resizedBlob], cleanName, { type: 'image/jpeg' }));
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Failed to decode image for resizing"));
+      };
+      
+      img.src = url;
+    });
+  };
+
+  /**
+   * Enhanced error stringification to avoid [object Object]
+   */
+  const stringifyError = (err: any): string => {
+    if (!err) return "Unknown error";
+    
+    let message = "";
+    if (typeof err === 'string') {
+      message = err;
+    } else if (err instanceof Error) {
+      message = err.message;
+    } else if (typeof err === 'object') {
+      // Check for common error properties
+      message = err.message || err.error || err.reason || (err.code ? `Code: ${err.code}` : JSON.stringify(err));
+    } else {
+      message = String(err);
+    }
+
+    if (message.includes('ERR_LIBHEIF') || message.includes('not supported') || message.includes('libheif')) {
+      return "ERR_LIBHEIF: This format is not supported by the browser decoder. This usually happens with 'Live Photos' or 'Burst' sequences.";
+    }
+
+    return message;
+  };
+
   const processFiles = async (files: File[]) => {
     if (files.length === 0) return;
     
     setIsConverting(true);
+    const newImages: ProductImage[] = [];
+
     try {
-      const processedResults = await Promise.all(
-        // Added explicit return type Promise<ProductImage | null> to fix type predicate compatibility issues
-        files.map(async (file: File): Promise<ProductImage | null> => {
-          let processedFile = file;
-          const fileNameLower = file.name.toLowerCase();
-          const isHeic = 
-            fileNameLower.endsWith('.heic') || 
-            fileNameLower.endsWith('.heif') || 
-            file.type === 'image/heic' || 
-            file.type === 'image/heif';
+      let heic2any: any = null;
+      try {
+        const module: any = await import('heic2any');
+        heic2any = module.default || module;
+        if (typeof heic2any !== 'function' && heic2any.heic2any) {
+          heic2any = heic2any.heic2any;
+        }
+      } catch (e) {
+        console.error("heic2any load failed:", e);
+      }
 
-          if (isHeic) {
-            try {
-              // @ts-ignore
-              const heic2any = (await import('heic2any')).default;
-              const convertedBlob = await heic2any({
-                blob: file,
-                toType: 'image/jpeg',
-                quality: 0.7 // Higher compatibility and smaller size for preview/processing
-              });
-              
-              const finalBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
-              
-              processedFile = new File(
-                [finalBlob], 
-                file.name.replace(/\.(heic|heif)$/i, ".jpg"), 
-                { type: 'image/jpeg' }
-              );
-            } catch (convError) {
-              console.error("HEIC conversion failed for:", file.name, convError);
-              // Return null so we can filter out failed HEIC conversions that would break the preview
-              return null;
-            }
-          }
+      for (const file of files) {
+        const lowerName = file.name.toLowerCase();
+        const isHeicOrHeif = lowerName.endsWith('.heic') || lowerName.endsWith('.heif') || file.type.includes('heic') || file.type.includes('heif');
 
-          // Double check the type before creating a preview. 
-          // Most browsers can't render HEIC/HEIF natively yet.
-          const finalType = processedFile.type.toLowerCase();
-          if (finalType.includes('heic') || finalType.includes('heif')) {
-             console.warn("Skipping file as it remains in HEIC format and cannot be previewed:", file.name);
-             return null;
+        try {
+          // Allow up to 10MB as per user request
+          if (file.size > 10 * 1024 * 1024) throw new Error("File exceeds 10MB limit.");
+
+          let processedFile: File;
+          if (isHeicOrHeif) {
+            if (!heic2any) throw new Error("HEIC conversion library unavailable.");
+            
+            // Try conversion
+            const result = await heic2any({
+              blob: file,
+              toType: 'image/jpeg',
+              quality: 0.6,
+            });
+            const convertedBlob = Array.isArray(result) ? result[0] : result;
+            
+            // Mandatory "Large" resizing to prevent memory crashes on Actual Size photos
+            processedFile = await resizeToLarge(convertedBlob, file.name);
+          } else {
+            // JPG/PNG: Still resize to "Large" if they are huge
+            processedFile = await resizeToLarge(file, file.name);
           }
 
           const previewUrl = URL.createObjectURL(processedFile);
           const base64 = await fileToBase64(processedFile);
           
-          return {
+          newImages.push({
             id: Math.random().toString(36).substr(2, 9),
             file: processedFile,
             previewUrl,
             base64,
-            status: 'pending' as const
-          };
-        })
-      );
+            status: 'pending'
+          });
+        } catch (err: any) {
+          console.error(`Error for ${file.name}:`, err);
+          const msg = stringifyError(err);
+          
+          let fallbackUrl = "";
+          try { fallbackUrl = URL.createObjectURL(file); } catch(e) {}
 
-      // Filter out any nulls from failed conversions or unsupported formats
-      const newImages = processedResults.filter((img): img is ProductImage => img !== null);
+          newImages.push({
+            id: Math.random().toString(36).substr(2, 9),
+            file,
+            previewUrl: fallbackUrl,
+            base64: '',
+            status: 'error',
+            error: msg
+          });
+        }
+      }
       
       if (newImages.length > 0) {
         onUpload(newImages);
-      } else if (files.length > 0) {
-        alert("Failed to process images. Please ensure they are valid JPG, PNG, or HEIC files.");
       }
     } catch (error) {
-      console.error("Error processing files:", error);
+      console.error("Batch processing failed:", error);
     } finally {
       setIsConverting(false);
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    processFiles(Array.from(e.target.files));
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isConverting) setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    
-    if (isConverting) return;
-    
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFiles(Array.from(e.dataTransfer.files));
-      e.dataTransfer.clearData();
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -123,7 +193,6 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
       reader.readAsDataURL(file);
       reader.onload = () => {
         const result = reader.result as string;
-        // Check if result contains the data prefix
         const base64Part = result.includes(',') ? result.split(',')[1] : result;
         resolve(base64Part);
       };
@@ -144,21 +213,20 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
           )}
         </div>
         <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-4 tracking-tight">
-          {isConverting ? "Converting & Optimizing Photos..." : "Bulk Product Image Processing"}
+          {isConverting ? "Optimizing Assets..." : "Bulk Product Image Optimizer"}
         </h2>
         <p className="text-slate-500 dark:text-slate-400 text-lg max-w-md mx-auto">
           {isConverting 
-            ? "We're optimizing your HEIC images for high-fidelity processing. This ensures maximum quality on Etsy." 
-            : "Upload your raw product photos. We'll automatically remove backgrounds, enhance quality, and create Etsy-ready studio shots."}
+            ? "Preparing your photos for professional AI generation. High-res HEIF files are being optimized and resized to Large." 
+            : "Upload raw photos (up to 10MB). We'll handle iPhone HEIF formats, resize them to Large for studio-grade results."}
         </p>
       </div>
 
       <div 
         onClick={() => !isConverting && fileInputRef.current?.click()}
-        onDragOver={handleDragOver}
-        onDragEnter={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (!isConverting && e.dataTransfer.files) processFiles(Array.from(e.dataTransfer.files)); }}
         className={`group relative border-4 border-dashed rounded-3xl p-12 transition-all bg-white dark:bg-slate-900 shadow-sm ${
           isConverting ? 'opacity-50 cursor-wait border-slate-200 dark:border-slate-800' : 
           isDragging ? 'border-orange-500 bg-orange-50/50 dark:bg-orange-500/10 cursor-copy' :
@@ -170,7 +238,7 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
           multiple 
           accept="image/*,.heic,.heif" 
           ref={fileInputRef}
-          onChange={handleFileChange}
+          onChange={(e) => e.target.files && processFiles(Array.from(e.target.files))}
           className="hidden"
           disabled={isConverting}
         />
@@ -182,34 +250,17 @@ const ImageUploader: React.FC<ImageUploaderProps> = ({ onUpload }) => {
               </svg>
             </span>
             <span className="text-lg font-bold text-slate-700 dark:text-slate-200 transition-colors">
-              {isConverting ? "Processing Files..." : isDragging ? "Drop your photos here" : "Click to upload or drag & drop"}
+              {isConverting ? "Analyzing Gallery..." : isDragging ? "Ready to drop" : "Select or drag & drop photos"}
             </span>
-            <span className="text-sm text-slate-400">JPG, PNG, HEIC up to 10MB per image</span>
+            <span className="text-sm text-slate-400 font-medium tracking-tight">iPhone HEIF / HEIC Support (Max 10MB)</span>
           </div>
           <button 
-            className={`px-6 py-2 rounded-xl font-medium shadow-sm transition-all ${
-              isDragging ? 'bg-orange-600 scale-110 text-white' : 'bg-slate-900 dark:bg-slate-700 text-white group-hover:scale-105'
-            }`}
+            className="bg-slate-900 dark:bg-slate-700 text-white px-8 py-3 rounded-2xl font-bold shadow-md transition-all group-hover:scale-105"
             disabled={isConverting}
             onClick={(e) => { e.stopPropagation(); !isConverting && fileInputRef.current?.click(); }}
           >
-            {isConverting ? "Optimizing..." : isDragging ? "Release to Drop" : "Select Files"}
+            {isConverting ? "Processing..." : "Select Photos"}
           </button>
-        </div>
-      </div>
-      
-      <div className="mt-8 flex items-center justify-center space-x-6 text-sm text-slate-400 dark:text-slate-500 font-medium">
-        <div className="flex items-center space-x-1">
-          <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
-          <span>iPhone Support (HEIC)</span>
-        </div>
-        <div className="flex items-center space-x-1">
-          <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
-          <span>Background Removal</span>
-        </div>
-        <div className="flex items-center space-x-1">
-          <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/></svg>
-          <span>Studio Lighting</span>
         </div>
       </div>
     </div>

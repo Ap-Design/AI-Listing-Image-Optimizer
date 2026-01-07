@@ -15,13 +15,13 @@ const App: React.FC = () => {
   const [state, setState] = useState<ExtendedAppState>({
     images: [],
     isGlobalProcessing: false,
-    globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution. Zero added artifacts.",
+    globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution.",
     currentStep: 'upload',
-    ignoreCustomInstructions: false
+    ignoreCustomInstructions: false,
+    activeProcessMode: 'draft'
   });
 
   const [model, setModel] = useState<ProcessingModel>(ProcessingModel.FLASH);
-  const isPro = model === ProcessingModel.PRO;
 
   const handleFilesUploaded = async (newImages: ProductImage[]) => {
     setState(prev => ({ 
@@ -30,8 +30,9 @@ const App: React.FC = () => {
       currentStep: 'refine'
     }));
     
-    // Process each image to get a suggested prompt
     for (const img of newImages) {
+      if (img.status === 'error') continue; // Skip analysis for failed images
+
       updateImageStatus(img.id, 'analyzing');
       try {
         const suggestion = await gemini.suggestPrompt(img.base64);
@@ -42,37 +43,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleModelChange = async (newModel: ProcessingModel) => {
-    if (newModel === ProcessingModel.PRO) {
-      if (typeof window !== 'undefined' && (window as any).aistudio) {
-        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-        if (!hasKey) {
-          await (window as any).aistudio.openSelectKey();
-        }
-      }
-    }
-    setModel(newModel);
-    // Reset override when switching models to ensure standard mode doesn't inherit pro-only state
-    setState(prev => ({ ...prev, ignoreCustomInstructions: false }));
-  };
-
-  /**
-   * Requirement: Etsy Validation Helper
-   * Checks if the resulting image meets the 2000px minimum dimension.
-   */
-  const validateEtsyDimensions = (dataUrl: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        // Etsy recommends at least 2000px for the shortest side for high-res zoom
-        const isMinMet = img.width >= 2000 && img.height >= 2000;
-        resolve(isMinMet);
-      };
-      img.onerror = () => resolve(false);
-      img.src = dataUrl;
-    });
-  };
-
   const updateImageStatus = (id: string, status: ProductImage['status'], extra: Partial<ProductImage> = {}) => {
     setState(prev => ({
       ...prev,
@@ -80,60 +50,43 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleRemoveImage = (id: string) => {
-    setState(prev => {
-      const remainingImages = prev.images.filter(img => img.id !== id);
-      // Clean up object URL to prevent memory leaks
-      const removedImage = prev.images.find(img => img.id === id);
-      if (removedImage?.previewUrl) {
-        URL.revokeObjectURL(removedImage.previewUrl);
+  const startProcessing = async (mode: 'draft' | 'finalize') => {
+    if (mode === 'finalize' && typeof window !== 'undefined' && (window as any).aistudio) {
+      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        await (window as any).aistudio.openSelectKey();
+        return;
       }
-      
-      return {
-        ...prev,
-        images: remainingImages,
-        currentStep: remainingImages.length === 0 ? 'upload' : prev.currentStep
-      };
-    });
-  };
+    }
 
-  const startBulkProcessing = async () => {
-    setState(prev => ({ ...prev, currentStep: 'process', isGlobalProcessing: true }));
+    setState(prev => ({ 
+      ...prev, 
+      currentStep: 'process', 
+      isGlobalProcessing: true,
+      activeProcessMode: mode
+    }));
     
     for (const img of state.images) {
-      if (img.status === 'error' || img.status === 'completed') continue;
+      if (img.status === 'error') continue; // Do not process errored items
+      if (mode === 'draft' && img.status !== 'ready') continue;
+      if (mode === 'finalize' && !['ready', 'drafted'].includes(img.status)) continue;
 
-      updateImageStatus(img.id, 'processing');
+      updateImageStatus(img.id, mode === 'draft' ? 'drafting' : 'finalizing');
+      
       try {
-        // Logic: Use global prompt if checkbox is checked AND we are in Pro mode, otherwise use custom instruction or fallback to global.
-        const promptToUse = (isPro && state.ignoreCustomInstructions) ? state.globalPrompt : (img.editedPrompt || state.globalPrompt);
-        
-        // Phase 1: AI Enhancement & Generation (using 2K for Pro)
-        const result = await gemini.processImage(img.base64, promptToUse, model);
+        const promptToUse = (state.ignoreCustomInstructions) ? state.globalPrompt : (img.editedPrompt || state.globalPrompt);
+        const result = await gemini.processImage(img.base64, promptToUse, mode);
         
         if (result) {
-          // Phase 2: Metadata Verification (Only for Pro Mode)
-          let isEtsyValidated = false;
-          if (isPro) {
-            console.log(`[EtsyFlow] Validating high-res dimensions for ${img.file.name}...`);
-            isEtsyValidated = await validateEtsyDimensions(result);
-          }
-          
-          updateImageStatus(img.id, 'completed', { 
-            resultUrl: result,
-            isEtsyValidated: isEtsyValidated,
-            usedPrompt: promptToUse
+          updateImageStatus(img.id, mode === 'draft' ? 'drafted' : 'completed', { 
+            [mode === 'draft' ? 'draftUrl' : 'resultUrl']: result,
+            usedPrompt: promptToUse,
+            isEtsyValidated: mode === 'finalize'
           });
         } else {
-          updateImageStatus(img.id, 'error', { error: "Optimization failed" });
+          updateImageStatus(img.id, 'error', { error: `${mode} failed` });
         }
       } catch (err: any) {
-        // Handle API key issues as per guidelines
-        if (err.message?.includes("Requested entity was not found.")) {
-          if (typeof window !== 'undefined' && (window as any).aistudio) {
-            await (window as any).aistudio.openSelectKey();
-          }
-        }
         updateImageStatus(img.id, 'error', { error: "Processing failed" });
       }
     }
@@ -141,134 +94,102 @@ const App: React.FC = () => {
     setState(prev => ({ ...prev, currentStep: 'results', isGlobalProcessing: false }));
   };
 
-  const reset = () => {
-    // Revoke all preview URLs
-    state.images.forEach(img => {
-      if (img.previewUrl) URL.revokeObjectURL(img.previewUrl);
+  const handleRemoveImage = (id: string) => {
+    setState(prev => {
+      const remaining = prev.images.filter(img => img.id !== id);
+      return { ...prev, images: remaining, currentStep: remaining.length === 0 ? 'upload' : prev.currentStep };
     });
+  };
 
+  const reset = () => {
     setState({
       images: [],
       isGlobalProcessing: false,
-      globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution. Zero added artifacts.",
+      globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution.",
       currentStep: 'upload',
-      ignoreCustomInstructions: false
+      ignoreCustomInstructions: false,
+      activeProcessMode: 'draft'
     });
   };
 
   return (
-    <div className={`${isPro ? 'dark' : ''}`}>
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-500 flex flex-col">
-        {/* Header */}
-        <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-50 transition-colors">
+    <div className="dark">
+      <div className="min-h-screen bg-slate-950 transition-colors duration-500 flex flex-col text-slate-200">
+        <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2 cursor-pointer" onClick={reset}>
               <div className="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(249,115,22,0.3)]">
                 <span className="text-white font-bold text-xl">E</span>
               </div>
-              <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center">
-                EtsyFlow 
-                {isPro && (
-                  <span className="ml-2 px-2 py-0.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-[9px] font-black uppercase tracking-widest rounded shadow-sm">
-                    Pro Version
-                  </span>
-                )}
-              </h1>
+              <h1 className="text-xl font-bold tracking-tight">EtsyFlow</h1>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-full p-1 transition-colors">
-                <button 
-                  onClick={() => handleModelChange(ProcessingModel.FLASH)}
-                  className={`px-4 py-1.5 text-xs font-medium rounded-full transition-all ${model === ProcessingModel.FLASH ? 'bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
-                >
-                  Standard
-                </button>
-                <button 
-                  onClick={() => handleModelChange(ProcessingModel.PRO)}
-                  className={`px-4 py-1.5 text-xs font-medium rounded-full transition-all ${model === ProcessingModel.PRO ? 'bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
-                >
-                  High-Res (Pro)
-                </button>
-              </div>
-              {state.currentStep !== 'upload' && (
-                <button 
-                  onClick={reset}
-                  className="text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                >
-                  Start Over
-                </button>
-              )}
-            </div>
+            {state.currentStep !== 'upload' && (
+              <button onClick={reset} className="text-sm font-medium text-slate-400 hover:text-white transition-colors">Start Over</button>
+            )}
           </div>
         </header>
 
-        {/* Main Content */}
         <main className="flex-grow max-w-7xl mx-auto px-4 py-8 w-full">
-          {state.currentStep === 'upload' && (
-            <ImageUploader onUpload={handleFilesUploaded} />
-          )}
+          {state.currentStep === 'upload' && <ImageUploader onUpload={handleFilesUploaded} />}
 
           {state.currentStep === 'refine' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="space-y-8">
               <PromptEditor 
                 images={state.images}
                 globalPrompt={state.globalPrompt}
-                ignoreCustomInstructions={isPro && state.ignoreCustomInstructions}
+                ignoreCustomInstructions={state.ignoreCustomInstructions}
                 onGlobalPromptChange={(p) => setState(prev => ({ ...prev, globalPrompt: p }))}
                 onImagePromptChange={(id, p) => updateImageStatus(id, 'ready', { editedPrompt: p })}
                 onRemoveImage={handleRemoveImage}
-                onStartProcessing={startBulkProcessing}
+                onStartProcessing={() => {}} 
               />
               
-              <div className="flex flex-col items-center pt-8 space-y-4">
-                {isPro && (
-                  <label className="flex items-center space-x-3 cursor-pointer group mb-2">
-                    <div className="relative">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only peer"
-                        checked={state.ignoreCustomInstructions}
-                        onChange={(e) => setState(prev => ({ ...prev, ignoreCustomInstructions: e.target.checked }))}
-                      />
-                      <div className="w-10 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 dark:peer-focus:ring-orange-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
-                    </div>
-                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                      Ignore custom instructions (use Global Prompt for all)
-                    </span>
-                  </label>
-                )}
+              <div className="flex flex-col items-center pt-8 space-y-6">
+                <label className="flex items-center space-x-3 cursor-pointer group mb-2">
+                  <div className="relative">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={state.ignoreCustomInstructions}
+                      onChange={(e) => setState(prev => ({ ...prev, ignoreCustomInstructions: e.target.checked }))}
+                    />
+                    <div className="w-10 h-6 bg-slate-800 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                  </div>
+                  <span className="text-sm font-semibold text-slate-300 group-hover:text-white transition-colors">
+                    Ignore custom instructions (use Global Prompt for all)
+                  </span>
+                </label>
 
-                <button 
-                  onClick={startBulkProcessing}
-                  disabled={state.images.some(img => img.status === 'analyzing')}
-                  className="bg-orange-500 hover:bg-orange-600 text-white px-12 py-4 rounded-full font-bold text-lg shadow-xl shadow-orange-500/20 transition-all transform hover:scale-105 disabled:opacity-50 disabled:scale-100"
-                >
-                  {state.images.some(img => img.status === 'analyzing') ? 'AI is Thinking...' : 'Optimize All Images'}
-                </button>
+                <div className="flex space-x-4">
+                  <button 
+                    onClick={() => startProcessing('draft')}
+                    className="bg-slate-800 hover:bg-slate-700 text-white px-8 py-4 rounded-2xl font-bold transition-all border border-slate-700"
+                  >
+                    Generate Quick Drafts
+                  </button>
+                  <button 
+                    onClick={() => startProcessing('finalize')}
+                    className="bg-gradient-to-r from-orange-500 to-amber-500 hover:scale-105 text-white px-8 py-4 rounded-2xl font-bold shadow-xl shadow-orange-500/20 transition-all flex items-center"
+                  >
+                    Finalize for Etsy (4K)
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
           {state.currentStep === 'process' && (
-            <ProcessingQueue images={state.images} isPro={isPro} />
+            <ProcessingQueue images={state.images} isPro={state.activeProcessMode === 'finalize'} />
           )}
 
           {state.currentStep === 'results' && (
-            <ResultsGallery images={state.images} isPro={isPro} />
+            <ResultsGallery 
+              images={state.images} 
+              isPro={state.activeProcessMode === 'finalize'} 
+              onFinalizeAll={() => startProcessing('finalize')}
+            />
           )}
         </main>
-
-        {/* Footer */}
-        <footer className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-8 transition-colors">
-          <div className="max-w-7xl mx-auto px-4 text-center">
-            <p className="text-slate-400 dark:text-slate-500 text-xs font-medium">
-              EtsyFlow Pro uses Google Gemini 3 models for 2K upscaling.
-              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="ml-2 text-orange-500 hover:underline">
-                Billing Documentation
-              </a>
-            </p>
-          </div>
-        </footer>
       </div>
     </div>
   );

@@ -4,11 +4,12 @@ export interface ProductImage {
   file: File;
   previewUrl: string;
   base64: string;
-  status: 'pending' | 'analyzing' | 'ready' | 'processing' | 'completed' | 'error';
+  status: 'pending' | 'analyzing' | 'ready' | 'drafting' | 'drafted' | 'finalizing' | 'completed' | 'error';
   suggestedPrompt?: string;
   editedPrompt?: string;
   usedPrompt?: string;
-  resultUrl?: string;
+  draftUrl?: string; // High-speed low-res preview
+  resultUrl?: string; // High-res 4K output
   error?: string;
   isEtsyValidated?: boolean;
 }
@@ -23,4 +24,5 @@ export interface AppState {
   isGlobalProcessing: boolean;
   globalPrompt: string;
   currentStep: 'upload' | 'refine' | 'process' | 'results';
+  activeProcessMode: 'draft' | 'finalize';
 }
