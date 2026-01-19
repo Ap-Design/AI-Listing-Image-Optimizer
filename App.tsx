@@ -1,46 +1,43 @@
 
 import React, { useState } from 'react';
-import { ProductImage, AppState, ProcessingModel } from './types';
+import { ProductImage, AppState } from './types';
 import { gemini } from './services/geminiService';
+import { replicateService } from './services/replicateService';
 import ImageUploader from './components/ImageUploader';
-import PromptEditor from './components/PromptEditor';
-import ProcessingQueue from './components/ProcessingQueue';
+import ProductDashboard from './components/ProductDashboard';
 import ResultsGallery from './components/ResultsGallery';
 
-interface ExtendedAppState extends AppState {
-  ignoreCustomInstructions: boolean;
-}
-
 const App: React.FC = () => {
-  const [state, setState] = useState<ExtendedAppState>({
+  const [state, setState] = useState<AppState>({
     images: [],
     isGlobalProcessing: false,
-    globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution.",
     currentStep: 'upload',
-    ignoreCustomInstructions: false,
-    activeProcessMode: 'draft'
+    enhancementMode: 'polish'
   });
 
-  const [model, setModel] = useState<ProcessingModel>(ProcessingModel.FLASH);
+  const [showKeyHint, setShowKeyHint] = useState(false);
 
+  // STEP 1: Upload & Auto-Analyze (Vision)
   const handleFilesUploaded = async (newImages: ProductImage[]) => {
     setState(prev => ({ 
       ...prev, 
       images: [...prev.images, ...newImages],
-      currentStep: 'refine'
+      currentStep: 'dashboard'
     }));
     
-    for (const img of newImages) {
-      if (img.status === 'error') continue; // Skip analysis for failed images
-
+    await Promise.all(newImages.map(async (img) => {
       updateImageStatus(img.id, 'analyzing');
       try {
-        const suggestion = await gemini.suggestPrompt(img.base64);
-        updateImageStatus(img.id, 'ready', { suggestedPrompt: suggestion, editedPrompt: suggestion });
+        const seoData = await gemini.analyzeProduct(img.base64);
+        setState(prev => ({
+          ...prev,
+          images: prev.images.map(i => i.id === img.id ? { ...i, status: 'analyzed', seo: seoData } : i)
+        }));
       } catch (err) {
-        updateImageStatus(img.id, 'error', { error: "Analysis failed" });
+        console.error(err);
+        updateImageStatus(img.id, 'analyzed');
       }
-    }
+    }));
   };
 
   const updateImageStatus = (id: string, status: ProductImage['status'], extra: Partial<ProductImage> = {}) => {
@@ -50,143 +47,127 @@ const App: React.FC = () => {
     }));
   };
 
-  const startProcessing = async (mode: 'draft' | 'finalize') => {
-    if (mode === 'finalize' && typeof window !== 'undefined' && (window as any).aistudio) {
-      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-        await (window as any).aistudio.openSelectKey();
-        return;
-      }
+  const prepareEnhancement = async (mode: 'polish' | 'master') => {
+    // Check if API key is selected (Required for Gemini 3 Pro Image)
+    const hasKey = await window.aistudio.hasSelectedApiKey();
+    if (!hasKey) {
+      setShowKeyHint(true);
+      await window.aistudio.openSelectKey();
     }
-
-    setState(prev => ({ 
-      ...prev, 
-      currentStep: 'process', 
-      isGlobalProcessing: true,
-      activeProcessMode: mode
-    }));
     
-    for (const img of state.images) {
-      if (img.status === 'error') continue; // Do not process errored items
-      if (mode === 'draft' && img.status !== 'ready') continue;
-      if (mode === 'finalize' && !['ready', 'drafted'].includes(img.status)) continue;
+    setState(prev => ({ ...prev, currentStep: 'results', enhancementMode: mode }));
+  };
 
-      updateImageStatus(img.id, mode === 'draft' ? 'drafting' : 'finalizing');
-      
-      try {
-        const promptToUse = (state.ignoreCustomInstructions) ? state.globalPrompt : (img.editedPrompt || state.globalPrompt);
-        const result = await gemini.processImage(img.base64, promptToUse, mode);
-        
-        if (result) {
-          updateImageStatus(img.id, mode === 'draft' ? 'drafted' : 'completed', { 
-            [mode === 'draft' ? 'draftUrl' : 'resultUrl']: result,
-            usedPrompt: promptToUse,
-            isEtsyValidated: mode === 'finalize'
+  const runBatchEnhancement = async () => {
+    const mode = state.enhancementMode;
+    const imagesToProcess = state.images.filter(
+      img => img.status !== 'error' && img.status !== 'completed' && img.status !== 'enhancing'
+    );
+
+    if (imagesToProcess.length === 0) return;
+
+    setState(prev => ({ ...prev, isGlobalProcessing: true }));
+
+    setState(prev => ({
+      ...prev,
+      images: prev.images.map(img => 
+        imagesToProcess.some(p => p.id === img.id) 
+          ? { ...img, status: 'enhancing' } 
+          : img
+      )
+    }));
+
+    setTimeout(async () => {
+      for (const img of imagesToProcess) {
+        try {
+          // Fixed: Calling with 5 arguments as required by the updated service
+          const outputUrl = await replicateService.enhanceImage(
+            img.base64, 
+            img.file.type, 
+            mode,
+            img.originalWidth,
+            img.originalHeight
+          );
+          
+          updateImageStatus(img.id, 'completed', { 
+            resultUrl: outputUrl,
+            // Reflect the actual target resolution in UI
+            newWidth: mode === 'master' ? 4096 : 2048,
+            newHeight: mode === 'master' ? 4096 : 2048
           });
-        } else {
-          updateImageStatus(img.id, 'error', { error: `${mode} failed` });
+        } catch (err: any) {
+          console.error(`Processing failed for ${img.id}:`, err);
+          if (err.message === "KEY_REQUIRED") {
+            await window.aistudio.openSelectKey();
+            updateImageStatus(img.id, 'error', { error: "Please select a valid paid API key and try again." });
+            break; // Stop batch if key is the issue
+          }
+          updateImageStatus(img.id, 'error', { error: err.message || "Enhancement failed" });
         }
-      } catch (err: any) {
-        updateImageStatus(img.id, 'error', { error: "Processing failed" });
       }
-    }
-
-    setState(prev => ({ ...prev, currentStep: 'results', isGlobalProcessing: false }));
+      setState(prev => ({ ...prev, isGlobalProcessing: false }));
+    }, 100);
   };
 
   const handleRemoveImage = (id: string) => {
-    setState(prev => {
-      const remaining = prev.images.filter(img => img.id !== id);
-      return { ...prev, images: remaining, currentStep: remaining.length === 0 ? 'upload' : prev.currentStep };
-    });
+    setState(prev => ({ ...prev, images: prev.images.filter(img => img.id !== id) }));
   };
 
   const reset = () => {
     setState({
       images: [],
       isGlobalProcessing: false,
-      globalPrompt: "Professional studio product photography. The product remains unchanged as a locked asset. Minimalist clean background with subtle soft shadows. Natural real-world lighting, 85mm lens look, sharp focus, 8k resolution.",
       currentStep: 'upload',
-      ignoreCustomInstructions: false,
-      activeProcessMode: 'draft'
+      enhancementMode: 'polish'
     });
   };
 
   return (
     <div className="dark">
-      <div className="min-h-screen bg-slate-950 transition-colors duration-500 flex flex-col text-slate-200">
-        <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center space-x-2 cursor-pointer" onClick={reset}>
-              <div className="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(249,115,22,0.3)]">
-                <span className="text-white font-bold text-xl">E</span>
+      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans">
+        {showKeyHint && (
+          <div className="bg-orange-500 text-white text-xs py-2 px-4 text-center font-bold">
+            Pro Features Active: High-resolution upscaling requires a paid API key. 
+            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="underline ml-2">Setup Billing</a>
+          </div>
+        )}
+        
+        <header className="bg-slate-900/50 backdrop-blur-lg border-b border-slate-800 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div className="flex items-center space-x-3 cursor-pointer" onClick={reset}>
+              <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-amber-500 rounded-lg flex items-center justify-center shadow-lg shadow-orange-500/20">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               </div>
-              <h1 className="text-xl font-bold tracking-tight">EtsyFlow</h1>
+              <h1 className="text-xl font-bold tracking-tight text-white">EtsyFlow <span className="text-slate-500 font-normal">Enhancer</span></h1>
             </div>
             {state.currentStep !== 'upload' && (
-              <button onClick={reset} className="text-sm font-medium text-slate-400 hover:text-white transition-colors">Start Over</button>
+               <div className="flex items-center space-x-4">
+                 <span className="text-xs font-mono text-slate-500">GEMINI 3 PRO 4K ACTIVE</span>
+                 <button onClick={reset} className="text-sm font-medium text-slate-300 hover:text-white">New Batch</button>
+               </div>
             )}
           </div>
         </header>
 
-        <main className="flex-grow max-w-7xl mx-auto px-4 py-8 w-full">
+        <main className="max-w-7xl mx-auto px-6 py-10">
           {state.currentStep === 'upload' && <ImageUploader onUpload={handleFilesUploaded} />}
 
-          {state.currentStep === 'refine' && (
-            <div className="space-y-8">
-              <PromptEditor 
-                images={state.images}
-                globalPrompt={state.globalPrompt}
-                ignoreCustomInstructions={state.ignoreCustomInstructions}
-                onGlobalPromptChange={(p) => setState(prev => ({ ...prev, globalPrompt: p }))}
-                onImagePromptChange={(id, p) => updateImageStatus(id, 'ready', { editedPrompt: p })}
-                onRemoveImage={handleRemoveImage}
-                onStartProcessing={() => {}} 
+          {state.currentStep === 'dashboard' && (
+            <div className="space-y-10">
+              <ProductDashboard 
+                images={state.images} 
+                onRemoveImage={handleRemoveImage} 
+                onProcess={prepareEnhancement} 
               />
-              
-              <div className="flex flex-col items-center pt-8 space-y-6">
-                <label className="flex items-center space-x-3 cursor-pointer group mb-2">
-                  <div className="relative">
-                    <input 
-                      type="checkbox" 
-                      className="sr-only peer"
-                      checked={state.ignoreCustomInstructions}
-                      onChange={(e) => setState(prev => ({ ...prev, ignoreCustomInstructions: e.target.checked }))}
-                    />
-                    <div className="w-10 h-6 bg-slate-800 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
-                  </div>
-                  <span className="text-sm font-semibold text-slate-300 group-hover:text-white transition-colors">
-                    Ignore custom instructions (use Global Prompt for all)
-                  </span>
-                </label>
-
-                <div className="flex space-x-4">
-                  <button 
-                    onClick={() => startProcessing('draft')}
-                    className="bg-slate-800 hover:bg-slate-700 text-white px-8 py-4 rounded-2xl font-bold transition-all border border-slate-700"
-                  >
-                    Generate Quick Drafts
-                  </button>
-                  <button 
-                    onClick={() => startProcessing('finalize')}
-                    className="bg-gradient-to-r from-orange-500 to-amber-500 hover:scale-105 text-white px-8 py-4 rounded-2xl font-bold shadow-xl shadow-orange-500/20 transition-all flex items-center"
-                  >
-                    Finalize for Etsy (4K)
-                  </button>
-                </div>
-              </div>
+              <div className="h-24"></div>
             </div>
-          )}
-
-          {state.currentStep === 'process' && (
-            <ProcessingQueue images={state.images} isPro={state.activeProcessMode === 'finalize'} />
           )}
 
           {state.currentStep === 'results' && (
             <ResultsGallery 
               images={state.images} 
-              isPro={state.activeProcessMode === 'finalize'} 
-              onFinalizeAll={() => startProcessing('finalize')}
+              isPro={state.enhancementMode === 'master'} 
+              onStartProcessing={runBatchEnhancement} 
             />
           )}
         </main>

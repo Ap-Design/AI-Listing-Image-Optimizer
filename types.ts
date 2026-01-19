@@ -4,25 +4,32 @@ export interface ProductImage {
   file: File;
   previewUrl: string;
   base64: string;
-  status: 'pending' | 'analyzing' | 'ready' | 'drafting' | 'drafted' | 'finalizing' | 'completed' | 'error';
-  suggestedPrompt?: string;
-  editedPrompt?: string;
-  usedPrompt?: string;
-  draftUrl?: string; // High-speed low-res preview
-  resultUrl?: string; // High-res 4K output
-  error?: string;
-  isEtsyValidated?: boolean;
-}
+  // Status flow: Upload -> Analyzing (Vision) -> Analyzed -> Enhancing (Replicate) -> Completed
+  status: 'pending' | 'analyzing' | 'analyzed' | 'enhancing' | 'completed' | 'error';
+  
+  // Resolution Metrics
+  originalWidth: number;
+  originalHeight: number;
+  newWidth?: number;
+  newHeight?: number;
+  resolutionHealth: 'good' | 'needs_upscale';
 
-export enum ProcessingModel {
-  FLASH = 'gemini-2.5-flash-image',
-  PRO = 'gemini-3-pro-image-preview'
+  // AI Generated SEO Data
+  seo?: {
+    title: string;
+    tags: string[];
+    category: string;
+    visualDescription: string;
+  };
+
+  // Results
+  resultUrl?: string;
+  error?: string;
 }
 
 export interface AppState {
   images: ProductImage[];
   isGlobalProcessing: boolean;
-  globalPrompt: string;
-  currentStep: 'upload' | 'refine' | 'process' | 'results';
-  activeProcessMode: 'draft' | 'finalize';
+  currentStep: 'upload' | 'dashboard' | 'results';
+  enhancementMode: 'polish' | 'master';
 }
