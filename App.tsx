@@ -47,6 +47,13 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleImagePromptChange = (id: string, prompt: string) => {
+    setState(prev => ({
+      ...prev,
+      images: prev.images.map(img => img.id === id ? { ...img, editedPrompt: prompt } : img)
+    }));
+  };
+
   const prepareEnhancement = async (mode: 'polish' | 'master') => {
     // Check if API key is selected (Required for Gemini 3 Pro Image)
     const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -79,34 +86,45 @@ const App: React.FC = () => {
 
     setTimeout(async () => {
       for (const img of imagesToProcess) {
-        try {
-          // Fixed: Calling with 5 arguments as required by the updated service
-          const outputUrl = await replicateService.enhanceImage(
-            img.base64, 
-            img.file.type, 
-            mode,
-            img.originalWidth,
-            img.originalHeight
-          );
-          
-          updateImageStatus(img.id, 'completed', { 
-            resultUrl: outputUrl,
-            // Reflect the actual target resolution in UI
-            newWidth: mode === 'master' ? 4096 : 2048,
-            newHeight: mode === 'master' ? 4096 : 2048
-          });
-        } catch (err: any) {
-          console.error(`Processing failed for ${img.id}:`, err);
-          if (err.message === "KEY_REQUIRED") {
-            await window.aistudio.openSelectKey();
-            updateImageStatus(img.id, 'error', { error: "Please select a valid paid API key and try again." });
-            break; // Stop batch if key is the issue
-          }
-          updateImageStatus(img.id, 'error', { error: err.message || "Enhancement failed" });
-        }
+        await processSingleImage(img, mode);
       }
       setState(prev => ({ ...prev, isGlobalProcessing: false }));
     }, 100);
+  };
+
+  const handleSingleImageEnhance = async (id: string) => {
+    const img = state.images.find(i => i.id === id);
+    if (!img) return;
+
+    updateImageStatus(id, 'enhancing');
+    await processSingleImage(img, state.enhancementMode);
+  };
+
+  const processSingleImage = async (img: ProductImage, mode: 'polish' | 'master') => {
+    try {
+      const outputUrl = await replicateService.enhanceImage(
+        img.base64, 
+        img.file.type, 
+        mode,
+        img.originalWidth,
+        img.originalHeight,
+        img.editedPrompt
+      );
+      
+      updateImageStatus(img.id, 'completed', { 
+        resultUrl: outputUrl,
+        newWidth: mode === 'master' ? 4096 : 2048,
+        newHeight: mode === 'master' ? 4096 : 2048
+      });
+    } catch (err: any) {
+      console.error(`Processing failed for ${img.id}:`, err);
+      if (err.message === "KEY_REQUIRED") {
+        await window.aistudio.openSelectKey();
+        updateImageStatus(img.id, 'error', { error: "Please select a valid paid API key and try again." });
+      } else {
+        updateImageStatus(img.id, 'error', { error: err.message || "Enhancement failed" });
+      }
+    }
   };
 
   const handleRemoveImage = (id: string) => {
@@ -167,7 +185,9 @@ const App: React.FC = () => {
             <ResultsGallery 
               images={state.images} 
               isPro={state.enhancementMode === 'master'} 
-              onStartProcessing={runBatchEnhancement} 
+              onStartProcessing={runBatchEnhancement}
+              onImagePromptChange={handleImagePromptChange}
+              onRefineImage={handleSingleImageEnhance}
             />
           )}
         </main>

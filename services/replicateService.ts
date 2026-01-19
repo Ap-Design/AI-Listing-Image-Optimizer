@@ -9,9 +9,16 @@ import { GoogleGenAI } from "@google/genai";
 export const replicateService = {
   /**
    * Enhances a product image using Gemini 3 Pro.
-   * Prompts the model to sharpen and upscale to 2K or 4K.
+   * Prompts the model to sharpen and upscale to 2K or 4K with strict preservation rules.
    */
-  enhanceImage: async (base64: string, mimeType: string, mode: 'polish' | 'master', originalWidth: number, originalHeight: number): Promise<string> => {
+  enhanceImage: async (
+    base64: string, 
+    mimeType: string, 
+    mode: 'polish' | 'master', 
+    originalWidth: number, 
+    originalHeight: number,
+    userPrompt?: string
+  ): Promise<string> => {
     // Freshly initialize client to capture latest key selection from UI dialog
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
@@ -32,9 +39,25 @@ export const replicateService = {
       else if (ratio < 0.6) aspectRatio = "9:16";
       else if (ratio < 0.8) aspectRatio = "3:4";
 
+      // CRITICAL RULES to preserve product integrity
+      const SYSTEM_CONSTRAINTS = `
+CRITICAL RULES:
+1. PRESERVE THE PRODUCT AS A LOCKED ASSET.
+2. EXPLICITLY FORBID modifying the product's shape, color, branding, or texture.
+3. Focus purely on the environment, lighting, and camera settings to enhance the professional look.
+4. FORBID adding extra objects that touch or overlap the product.
+5. Demand pixel-perfect silhouette preservation.`;
+
+      const refinementNote = userPrompt ? `\nUSER SPECIFIC REFINEMENT: ${userPrompt}` : '';
+
       const enhancementPrompt = mode === 'master' 
-        ? "PROFESSIONAL PRODUCT PHOTOGRAPHY UPGRADE: Upscale this image to maximum 4K resolution. Sharpen every detail, remove all compression artifacts, and optimize studio lighting. Ensure textures like fabric, wood, or metal are hyper-realistic. Output a clean, high-end commercial asset."
-        : "STUDIO ENHANCEMENT: Upscale this product photo to 2K resolution. Sharpen edges, balance the exposure, and ensure the product is crisp and clean for an Etsy listing.";
+        ? `PROFESSIONAL 4K PRODUCT MASTER: ${SYSTEM_CONSTRAINTS}${refinementNote}
+           Upscale this image to maximum 4096px resolution. Perform high-fidelity sharpening of existing details only. 
+           Eliminate all compression artifacts. Optimize studio lighting for a premium commercial finish.
+           The output must be a clean, high-end asset where the product is exactly the same as the source, just higher clarity.`
+        : `2K STUDIO POLISH: ${SYSTEM_CONSTRAINTS}${refinementNote}
+           Upscale this product photo to 2048px resolution. Sharpen edges cleanly, balance the exposure for a bright Etsy aesthetic,
+           and ensure the product remains perfectly faithful to the original source.`;
 
       const response = await ai.models.generateContent({
         model,
@@ -60,7 +83,7 @@ export const replicateService = {
         }
       });
 
-      // Extract the generated image from the response parts (iterating through parts as required)
+      // Extract the generated image from the response parts
       if (response.candidates && response.candidates[0].content.parts) {
         for (const part of response.candidates[0].content.parts) {
           if (part.inlineData) {

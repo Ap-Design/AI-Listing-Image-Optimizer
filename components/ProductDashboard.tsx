@@ -47,7 +47,7 @@ const ProductDashboard: React.FC<ProductDashboardProps> = ({ images, onRemoveIma
               </div>
 
               {/* Smart Sidebar Info */}
-              <div className="flex-1 p-5 flex flex-col justify-between">
+              <div className="flex-1 md:w-1/3 p-5 flex flex-col justify-between">
                 <div>
                   <div className="flex items-start justify-between mb-3">
                     <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm truncate pr-4">{img.file.name}</h4>

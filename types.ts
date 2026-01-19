@@ -22,6 +22,9 @@ export interface ProductImage {
     visualDescription: string;
   };
 
+  // User input for specific image
+  editedPrompt?: string;
+
   // Results
   resultUrl?: string;
   error?: string;
