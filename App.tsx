@@ -1,8 +1,7 @@
 
 import React, { useState } from 'react';
 import { ProductImage, AppState } from './types';
-import { gemini } from './services/geminiService';
-import { replicateService } from './services/replicateService';
+import { upscaleService } from './services/upscaleService';
 import ImageUploader from './components/ImageUploader';
 import ProductDashboard from './components/ProductDashboard';
 import ResultsGallery from './components/ResultsGallery';
@@ -15,28 +14,16 @@ const App: React.FC = () => {
     enhancementMode: 'polish'
   });
 
-  const [showKeyHint, setShowKeyHint] = useState(false);
+  const handleFilesUploaded = (newImages: ProductImage[]) => {
+    const readyImages = newImages.map(img => ({
+      ...img,
+      status: 'analyzed' as const
+    }));
 
-  // STEP 1: Upload & Auto-Analyze (Vision)
-  const handleFilesUploaded = async (newImages: ProductImage[]) => {
     setState(prev => ({ 
       ...prev, 
-      images: [...prev.images, ...newImages],
+      images: [...prev.images, ...readyImages],
       currentStep: 'dashboard'
-    }));
-    
-    await Promise.all(newImages.map(async (img) => {
-      updateImageStatus(img.id, 'analyzing');
-      try {
-        const seoData = await gemini.analyzeProduct(img.base64);
-        setState(prev => ({
-          ...prev,
-          images: prev.images.map(i => i.id === img.id ? { ...i, status: 'analyzed', seo: seoData } : i)
-        }));
-      } catch (err) {
-        console.error(err);
-        updateImageStatus(img.id, 'analyzed');
-      }
     }));
   };
 
@@ -55,18 +42,10 @@ const App: React.FC = () => {
   };
 
   const prepareEnhancement = async (mode: 'polish' | 'master') => {
-    // Check if API key is selected (Required for Gemini 3 Pro Image)
-    const hasKey = await window.aistudio.hasSelectedApiKey();
-    if (!hasKey) {
-      setShowKeyHint(true);
-      await window.aistudio.openSelectKey();
-    }
-    
     setState(prev => ({ ...prev, currentStep: 'results', enhancementMode: mode }));
   };
 
   const runBatchEnhancement = async () => {
-    const mode = state.enhancementMode;
     const imagesToProcess = state.images.filter(
       img => img.status !== 'error' && img.status !== 'completed' && img.status !== 'enhancing'
     );
@@ -79,51 +58,46 @@ const App: React.FC = () => {
       ...prev,
       images: prev.images.map(img => 
         imagesToProcess.some(p => p.id === img.id) 
-          ? { ...img, status: 'enhancing' } 
+          ? { ...img, status: 'enhancing', error: undefined } 
           : img
       )
     }));
 
-    setTimeout(async () => {
-      for (const img of imagesToProcess) {
-        await processSingleImage(img, mode);
-      }
-      setState(prev => ({ ...prev, isGlobalProcessing: false }));
-    }, 100);
+    for (const img of imagesToProcess) {
+      await processSingleImage(img);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    
+    setState(prev => ({ ...prev, isGlobalProcessing: false }));
   };
 
   const handleSingleImageEnhance = async (id: string) => {
     const img = state.images.find(i => i.id === id);
     if (!img) return;
 
-    updateImageStatus(id, 'enhancing');
-    await processSingleImage(img, state.enhancementMode);
+    updateImageStatus(id, 'enhancing', { error: undefined });
+    await processSingleImage(img);
   };
 
-  const processSingleImage = async (img: ProductImage, mode: 'polish' | 'master') => {
+  const processSingleImage = async (img: ProductImage) => {
     try {
-      const outputUrl = await replicateService.enhanceImage(
+      const result = await upscaleService.enhanceImage(
         img.base64, 
         img.file.type, 
-        mode,
-        img.originalWidth,
-        img.originalHeight,
-        img.editedPrompt
+        img.originalWidth
       );
       
       updateImageStatus(img.id, 'completed', { 
-        resultUrl: outputUrl,
-        newWidth: mode === 'master' ? 4096 : 2048,
-        newHeight: mode === 'master' ? 4096 : 2048
+        resultUrl: result.url,
+        newWidth: img.originalWidth * result.scale,
+        newHeight: img.originalHeight * result.scale,
+        error: undefined
       });
     } catch (err: any) {
       console.error(`Processing failed for ${img.id}:`, err);
-      if (err.message === "KEY_REQUIRED") {
-        await window.aistudio.openSelectKey();
-        updateImageStatus(img.id, 'error', { error: "Please select a valid paid API key and try again." });
-      } else {
-        updateImageStatus(img.id, 'error', { error: err.message || "Enhancement failed" });
-      }
+      updateImageStatus(img.id, 'error', { 
+        error: err.message || "AI Enhancement failed. Please retry." 
+      });
     }
   };
 
@@ -143,25 +117,18 @@ const App: React.FC = () => {
   return (
     <div className="dark">
       <div className="min-h-screen bg-slate-950 text-slate-200 font-sans">
-        {showKeyHint && (
-          <div className="bg-orange-500 text-white text-xs py-2 px-4 text-center font-bold">
-            Pro Features Active: High-resolution upscaling requires a paid API key. 
-            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="underline ml-2">Setup Billing</a>
-          </div>
-        )}
-        
         <header className="bg-slate-900/50 backdrop-blur-lg border-b border-slate-800 sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
             <div className="flex items-center space-x-3 cursor-pointer" onClick={reset}>
               <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-amber-500 rounded-lg flex items-center justify-center shadow-lg shadow-orange-500/20">
                 <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               </div>
-              <h1 className="text-xl font-bold tracking-tight text-white">EtsyFlow <span className="text-slate-500 font-normal">Enhancer</span></h1>
+              <h1 className="text-xl font-bold tracking-tight text-white">EtsyFlow <span className="text-slate-500 font-normal">Optimizer</span></h1>
             </div>
             {state.currentStep !== 'upload' && (
                <div className="flex items-center space-x-4">
-                 <span className="text-xs font-mono text-slate-500">GEMINI 3 PRO 4K ACTIVE</span>
-                 <button onClick={reset} className="text-sm font-medium text-slate-300 hover:text-white">New Batch</button>
+                 <span className="text-xs font-mono text-slate-500 uppercase tracking-widest">FAL.AI PIELINE ACTIVE</span>
+                 <button onClick={reset} className="text-sm font-medium text-slate-300 hover:text-white bg-slate-800 px-3 py-1 rounded-md">New Batch</button>
                </div>
             )}
           </div>

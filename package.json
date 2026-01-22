@@ -13,7 +13,8 @@
     "react-dom": "^19.2.3",
     "react": "^19.2.3",
     "heic2any": "^0.0.4",
-    "replicate": "^1.4.0"
+    "replicate": "^1.4.0",
+    "@fal-ai/client": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

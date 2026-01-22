@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ProductImage } from '../types';
 
 interface ResultsGalleryProps {
@@ -12,21 +12,17 @@ interface ResultsGalleryProps {
 
 const ResultsGallery: React.FC<ResultsGalleryProps> = ({ 
   images, 
-  isPro, 
   onStartProcessing, 
-  onImagePromptChange,
   onRefineImage 
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [compareVal, setCompareVal] = useState(50);
   const [isZipping, setIsZipping] = useState(false);
+  const [isSourceLoaded, setIsSourceLoaded] = useState(false);
+  const [isEnhancedLoaded, setIsEnhancedLoaded] = useState(false);
 
-  // Filter: Show all images not in error state
   const visibleImages = images.filter(img => img.status !== 'error');
-
-  // Check if there are any pending tasks (images that are not completed and not enhancing yet)
   const hasPending = visibleImages.some(img => img.status === 'analyzed' || img.status === 'pending');
-  // Check if any are currently running
   const isRunning = visibleImages.some(img => img.status === 'enhancing');
 
   useEffect(() => {
@@ -34,6 +30,28 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
       setSelectedId(visibleImages[0].id);
     }
   }, [visibleImages.length, selectedId]);
+
+  // Pre-decode images when selection changes to prevent "partial loading" flicker
+  useEffect(() => {
+    if (selectedId) {
+      setIsSourceLoaded(false);
+      setIsEnhancedLoaded(false);
+      const img = visibleImages.find(i => i.id === selectedId);
+      if (img) {
+        // Pre-load original
+        const sourceImg = new Image();
+        sourceImg.src = img.previewUrl;
+        sourceImg.decode().then(() => setIsSourceLoaded(true)).catch(() => setIsSourceLoaded(true));
+
+        // Pre-load enhanced if exists
+        if (img.resultUrl) {
+          const enhancedImg = new Image();
+          enhancedImg.src = img.resultUrl;
+          enhancedImg.decode().then(() => setIsEnhancedLoaded(true)).catch(() => setIsEnhancedLoaded(true));
+        }
+      }
+    }
+  }, [selectedId, visibleImages]);
 
   const selectedImage = visibleImages.find(i => i.id === selectedId);
 
@@ -47,25 +65,26 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
       const JSZip = JSZipModule.default;
       const zip = new JSZip();
       
-      completedImages.forEach((img) => {
+      for (const img of completedImages) {
         if (img.resultUrl) {
-          const base64Data = img.resultUrl.split(',')[1] || img.resultUrl;
-          zip.file(`enhanced-${img.file.name.replace(/\.[^/.]+$/, "")}.png`, base64Data, { base64: true });
+          const response = await fetch(img.resultUrl);
+          const blob = await response.blob();
+          zip.file(`highres-${img.file.name.replace(/\.[^/.]+$/, "")}.png`, blob);
         }
-      });
+      }
       
       const content = await zip.generateAsync({ type: 'blob' });
       const zipUrl = URL.createObjectURL(content);
       const link = document.createElement('a');
       link.href = zipUrl;
-      link.download = `etsy-master-assets.zip`;
+      link.download = `etsy-high-res-batch.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       setTimeout(() => URL.revokeObjectURL(zipUrl), 100);
     } catch (error) { 
       console.error(error);
-      alert("Zipping failed. Ensure CORS is enabled if fetching remote URLs."); 
+      alert("Download failed."); 
     } finally { 
       setIsZipping(false); 
     }
@@ -73,14 +92,13 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
 
   return (
     <div className="space-y-8">
-      {/* Header Stats & Controls */}
       <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
           <h2 className="text-2xl font-bold text-white tracking-tight">
-            {isRunning ? 'Enhancement in Progress...' : hasPending ? 'Review & Enhance' : 'Enhancement Complete'}
+            {isRunning ? 'Sharpening Batch...' : hasPending ? 'Review & Upscale' : 'Optimization Complete'}
           </h2>
           <p className="text-slate-400 text-sm mt-1">
-             {visibleImages.filter(i => i.resultUrl).length} of {visibleImages.length} images optimized
+             {visibleImages.filter(i => i.resultUrl).length} of {visibleImages.length} images at Etsy target resolution
           </p>
         </div>
         
@@ -99,45 +117,75 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
             disabled={isZipping || visibleImages.filter(i => i.resultUrl).length === 0} 
             className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isZipping ? 'Archiving...' : 'Download All'}
+            {isZipping ? 'Archiving...' : 'Download All High-Res'}
           </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Viewer Column */}
         <div className="lg:col-span-2 space-y-6">
           {selectedImage ? (
             <>
-              <div className="bg-slate-950 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl relative group select-none flex flex-col h-[500px]">
-                
-                {/* Badges */}
+              <div className="bg-slate-950 rounded-3xl overflow-hidden border border-slate-800 shadow-2xl relative group select-none flex flex-col h-[600px]">
                 <div className="absolute top-4 left-4 z-20 bg-black/60 backdrop-blur-md text-white text-[10px] font-mono px-3 py-1.5 rounded-lg border border-white/10">
-                  Original: {selectedImage.originalWidth}px
+                  Source: {selectedImage.originalWidth}px
                 </div>
                 
                 {selectedImage.resultUrl && (
-                  <div className="absolute top-4 right-4 z-20 bg-orange-500 text-white text-[10px] font-mono px-3 py-1.5 rounded-lg font-bold shadow-lg">
-                    Enhanced: {selectedImage.newWidth || (selectedImage.originalWidth * (isPro ? 4 : 2))}px
+                  <div className="absolute top-4 right-4 z-20 bg-green-500 text-white text-[10px] font-mono px-3 py-1.5 rounded-lg font-bold shadow-lg">
+                    Optimized: {selectedImage.newWidth}px
                   </div>
                 )}
 
-                {/* Viewer Area */}
-                <div className="relative flex-grow bg-slate-900/50">
+                <div className="relative flex-grow bg-slate-900/50 flex items-center justify-center overflow-hidden">
+                  {!isSourceLoaded && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm z-10">
+                      <div className="w-8 h-8 border-2 border-slate-700 border-t-orange-500 rounded-full animate-spin"></div>
+                    </div>
+                  )}
+
                   {selectedImage.resultUrl ? (
-                    // COMPARE MODE
                     <div className="relative w-full h-full cursor-ew-resize">
-                      <div className="absolute inset-0 z-10" style={{ clipPath: `inset(0 ${100 - compareVal}% 0 0)` }}>
-                        <img src={selectedImage.resultUrl} className="w-full h-full object-contain" alt="Enhanced" />
+                      {/* Enhanced Image Layer */}
+                      <div 
+                        className="absolute inset-0 z-10 transition-opacity duration-300" 
+                        style={{ 
+                          clipPath: `inset(0 ${100 - compareVal}% 0 0)`,
+                          willChange: 'clip-path',
+                          opacity: isEnhancedLoaded ? 1 : 0 
+                        }}
+                      >
+                        <img 
+                          src={selectedImage.resultUrl} 
+                          className="w-full h-full object-contain" 
+                          alt="Enhanced" 
+                          loading="eager"
+                        />
                       </div>
-                      <div className="absolute inset-0 z-0">
-                        <img src={selectedImage.previewUrl} className="w-full h-full object-contain opacity-50 grayscale" alt="Original" />
+                      
+                      {/* Source Image Layer */}
+                      <div 
+                        className="absolute inset-0 z-0 transition-opacity duration-300"
+                        style={{ opacity: isSourceLoaded ? 1 : 0 }}
+                      >
+                        <img 
+                          src={selectedImage.previewUrl} 
+                          className="w-full h-full object-contain opacity-40 grayscale" 
+                          alt="Original" 
+                          loading="eager"
+                        />
                       </div>
-                      <div className="absolute inset-y-0 z-20 w-0.5 bg-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.8)]" style={{ left: `${compareVal}%` }}>
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-xl">
-                          <svg className="w-4 h-4 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
+
+                      {/* Divider Slider */}
+                      <div 
+                        className="absolute inset-y-0 z-20 w-0.5 bg-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.8)] pointer-events-none" 
+                        style={{ left: `${compareVal}%`, willChange: 'left' }}
+                      >
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-2xl border border-slate-200">
+                          <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
                         </div>
                       </div>
+
                       <input 
                         type="range" min="0" max="100" value={compareVal} 
                         onChange={(e) => setCompareVal(parseInt(e.target.value))}
@@ -145,18 +193,22 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
                       />
                     </div>
                   ) : (
-                    // PREVIEW MODE (Ready to Enhance)
-                    <div className="relative w-full h-full">
-                      <img src={selectedImage.previewUrl} className="w-full h-full object-contain" alt="Original Preview" />
+                    <div className="relative w-full h-full transition-opacity duration-300" style={{ opacity: isSourceLoaded ? 1 : 0 }}>
+                      <img 
+                        src={selectedImage.previewUrl} 
+                        className="w-full h-full object-contain" 
+                        alt="Original Preview" 
+                        loading="eager"
+                      />
                       <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none">
                         {selectedImage.status === 'enhancing' ? (
                           <div className="bg-black/70 backdrop-blur-sm p-6 rounded-2xl flex flex-col items-center">
                             <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                            <p className="text-white font-bold tracking-widest uppercase text-sm animate-pulse">Upscaling...</p>
+                            <p className="text-white font-bold tracking-widest uppercase text-sm animate-pulse">Sharpening edges...</p>
                           </div>
                         ) : (
                           <div className="bg-black/50 backdrop-blur-sm px-6 py-3 rounded-full border border-white/10">
-                            <p className="text-white font-medium text-sm">Previewing Original • Click "Start Batch Upscale" to enhance</p>
+                            <p className="text-white font-medium text-sm">Reviewing Structural Integrity • Click "Start Batch Upscale"</p>
                           </div>
                         )}
                       </div>
@@ -164,57 +216,36 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
                   )}
                 </div>
               </div>
-
-              {/* Prompt Refinement Block */}
-              <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-lg">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center">
-                    <svg className="w-5 h-5 mr-2 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                    </svg>
-                    Refine Enhancement
-                  </h3>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Optional Customization</span>
-                </div>
-                
-                <div className="flex flex-col md:flex-row gap-4">
-                  <textarea 
-                    value={selectedImage.editedPrompt || ""}
-                    onChange={(e) => onImagePromptChange(selectedImage.id, e.target.value)}
-                    placeholder="Add specific instructions for this image (e.g., 'Place on a dark wood background', 'More warm lighting', 'Sharpen the logo')..."
-                    className="flex-grow min-h-[80px] p-4 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm text-slate-700 dark:text-slate-200 outline-none focus:ring-2 focus:ring-orange-500 transition-all resize-none"
-                  />
-                  <button 
-                    onClick={() => onRefineImage(selectedId!)}
-                    disabled={selectedImage.status === 'enhancing'}
-                    className="md:w-48 bg-slate-900 dark:bg-white text-white dark:text-slate-950 px-6 py-4 rounded-2xl font-bold text-sm hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100 shadow-xl flex flex-col items-center justify-center gap-1"
+              
+              <div className="flex gap-4">
+                 <button 
+                  onClick={() => onRefineImage(selectedId!)}
+                  disabled={selectedImage.status === 'enhancing'}
+                  className="flex-grow bg-slate-800 text-white py-4 rounded-2xl font-bold text-sm hover:bg-slate-700 transition-all disabled:opacity-50"
+                >
+                  {selectedImage.status === 'enhancing' ? "Processing..." : "Retry Sharpening"}
+                </button>
+                {selectedImage.resultUrl && (
+                  <a 
+                    href={selectedImage.resultUrl} 
+                    download={`etsy-${selectedImage.file.name}`}
+                    className="flex-grow bg-white text-slate-900 py-4 rounded-2xl font-bold text-sm text-center shadow-xl hover:scale-[1.02] transition-transform"
                   >
-                    {selectedImage.status === 'enhancing' ? (
-                      <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-                    ) : (
-                      <>
-                        <span>Refine Image</span>
-                        <span className="text-[10px] font-normal opacity-60">Uses Pro Image API</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-                <p className="mt-3 text-[10px] text-slate-400 italic">
-                  Note: Refinement applies the studio constraints plus your custom note. Product integrity remains locked.
-                </p>
+                    Download High-Res ({selectedImage.newWidth}px)
+                  </a>
+                )}
               </div>
             </>
           ) : (
              <div className="h-96 flex items-center justify-center text-slate-500 border-2 border-dashed border-slate-800 rounded-3xl">
-               No images available
+               Queue is empty
              </div>
           )}
         </div>
 
-        {/* Sidebar Queue List */}
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-lg h-fit max-h-[700px] flex flex-col">
           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex justify-between items-center">
-            <span>Batch Queue</span>
+            <span>Asset Queue</span>
             <span className="text-[10px] bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full">{visibleImages.length} items</span>
           </h3>
           
@@ -255,12 +286,12 @@ const ResultsGallery: React.FC<ResultsGalleryProps> = ({
                     <div className="text-[10px] font-mono mt-0.5">
                       {isCompleted ? (
                         <span className="text-green-600 dark:text-green-400">
-                          Ready: {(img.newWidth || (img.originalWidth * (isPro ? 4 : 2)))}px
+                          {img.newWidth}px Optimized
                         </span>
                       ) : isEnhancing ? (
-                        <span className="text-orange-500 animate-pulse">Upscaling...</span>
+                        <span className="text-orange-500 animate-pulse">Sharpening...</span>
                       ) : (
-                        <span className="text-slate-400">Waiting for start</span>
+                        <span className="text-slate-400">Ready for upscale</span>
                       )}
                     </div>
                   </div>

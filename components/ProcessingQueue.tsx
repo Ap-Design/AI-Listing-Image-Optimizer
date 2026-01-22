@@ -8,9 +8,7 @@ interface ProcessingQueueProps {
 }
 
 const ProcessingQueue: React.FC<ProcessingQueueProps> = ({ images, isPro }) => {
-  // Exclude images with error status from the queue display and progress calculation
   const processableImages = images.filter(img => img.status !== 'error');
-  // Fix: Removed reference to non-existent 'drafted' status
   const completed = processableImages.filter(i => i.status === 'completed').length;
   const total = processableImages.length;
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -19,12 +17,10 @@ const ProcessingQueue: React.FC<ProcessingQueueProps> = ({ images, isPro }) => {
     <div className="max-w-4xl mx-auto py-12">
       <div className="text-center mb-12">
         <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
-          {isPro ? "Pro Product Optimizer Active" : "Enhancing Your Products"}
+          {isPro ? "Professional Pure Upscaling" : "Etsy Asset Optimizer"}
         </h2>
         <p className="text-slate-500 dark:text-slate-400">
-          {isPro 
-            ? "Upscaling to 2K resolution and applying professional studio post-processing..." 
-            : "Processing high-fidelity studio renders. This may take a few moments..."}
+          Sharpening edges and textures using pixel-perfect super-resolution...
         </p>
       </div>
 
@@ -43,9 +39,7 @@ const ProcessingQueue: React.FC<ProcessingQueueProps> = ({ images, isPro }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {processableImages.map(img => {
-          // Fix: Replaced 'drafting' and 'finalizing' with valid statuses 'enhancing' and 'analyzing'
-          const isProcessing = img.status === 'enhancing' || img.status === 'analyzing';
-          // Fix: Removed 'drafted' from check
+          const isProcessing = img.status === 'enhancing';
           const isDone = img.status === 'completed';
           
           return (
@@ -71,13 +65,12 @@ const ProcessingQueue: React.FC<ProcessingQueueProps> = ({ images, isPro }) => {
                     isProcessing ? 'bg-orange-100 dark:bg-orange-500/10 text-orange-600' : 
                     'bg-slate-100 dark:bg-slate-800 text-slate-500'
                   }`}>
-                    {isProcessing && isPro ? "OPTIMIZING..." : img.status.toUpperCase()}
+                    {img.status.toUpperCase()}
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate mb-1 italic">
-                  {isProcessing && isPro ? "Upscaling to high resolution..." : 
-                   isProcessing ? "Processing assets..." : 
-                   isDone ? "Etsy-ready file generated" : "Waiting in queue..."}
+                  {isProcessing ? "Sharpening edges and textures..." : 
+                   isDone ? "2048px File Ready" : "In queue..."}
                 </p>
                 <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-1 overflow-hidden">
                   <div 
